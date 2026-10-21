@@ -1,12 +1,12 @@
 import json
 import time
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
 from .database import get_db
 from .auth import get_current_user_from_token
-from .question_generator import generate_questions
+from .question_generator import generate_questions, get_question_count_by_difficulty
 from .evaluator import evaluate_answer
 
 router = APIRouter(prefix="/api/interviews", tags=["interviews"])
@@ -16,7 +16,7 @@ class CreateInterviewReq(BaseModel):
     experience: str
     interview_type: str
     difficulty: str
-    total_questions: int = 5
+    total_questions: Optional[int] = None
 
 DURATION_MATRIX_SECONDS = {
     "Technical": {
@@ -50,13 +50,6 @@ def get_duration_per_question(interview_type: str, difficulty: str) -> int:
         d = "Medium"
     return DURATION_MATRIX_SECONDS[t][d]
 
-class CreateInterviewReq(BaseModel):
-    role: str
-    experience: str
-    interview_type: str
-    difficulty: str
-    total_questions: int = 5
-
 class SubmitAnswerReq(BaseModel):
     question_id: int
     user_answer: str
@@ -64,75 +57,93 @@ class SubmitAnswerReq(BaseModel):
 @router.post("")
 def create_interview(req: CreateInterviewReq, current_user: dict = Depends(get_current_user_from_token)):
     user_id = int(current_user["sub"])
+    diff_normalized = (req.difficulty or "Medium").strip().title()
+
+    # Enforce mandatory question counts per specification:
+    # Easy -> 10 questions, Medium -> 20 questions, Hard -> 30 questions
+    target_questions = get_question_count_by_difficulty(diff_normalized)
+
+    # 1. Generate questions and answers strictly from Gemini API
+    try:
+        questions = generate_questions(
+            role=req.role,
+            experience=req.experience,
+            interview_type=req.interview_type,
+            difficulty=diff_normalized,
+            total_questions=target_questions
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate questions via Gemini API: {str(e)}")
+
+    if not questions:
+        raise HTTPException(status_code=500, detail="Gemini API did not return any questions.")
+
+    actual_count = len(questions)
+
+    # 2. Persist interview and generated questions with ideal answers in MySQL
     conn = get_db()
     cursor = conn.cursor()
 
-    cursor.execute(
-        """INSERT INTO interviews 
-        (user_id, role, experience, interview_type, difficulty, total_questions, status)
-        VALUES (%s, %s, %s, %s, %s, %s, 'in_progress')""",
-        (user_id, req.role, req.experience, req.interview_type, req.difficulty, req.total_questions)
-    )
-    interview_id = cursor.lastrowid
-
-    # Fetch created_at timestamp in millisecond epoch
-    cursor.execute("SELECT started_at, UNIX_TIMESTAMP(started_at) AS start_ts FROM interviews WHERE id = %s", (interview_id,))
-    row = cursor.fetchone()
-    if row and row.get("start_ts"):
-        start_timestamp = int(row["start_ts"] * 1000)
-    else:
-        start_timestamp = int(time.time() * 1000)
-
-    # Calculate total duration in seconds
-    sec_per_q = get_duration_per_question(req.interview_type, req.difficulty)
-    duration_seconds = req.total_questions * sec_per_q
-
-    # Generate Questions
-    questions = generate_questions(
-        role=req.role,
-        experience=req.experience,
-        interview_type=req.interview_type,
-        difficulty=req.difficulty,
-        total_questions=req.total_questions
-    )
-
-    saved_questions = []
-    for q in questions:
-        q_type = q.get("question_type", req.interview_type)
+    try:
         cursor.execute(
-            """INSERT INTO questions
-            (interview_id, question_text, question_type, difficulty, question_order, ideal_answer, key_concepts)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-            (
-                interview_id,
-                q["question_text"],
-                q_type,
-                q.get("difficulty", req.difficulty),
-                q.get("question_order", 1),
-                q.get("ideal_answer", ""),
-                q.get("key_concepts", "")
-            )
+            """INSERT INTO interviews 
+            (user_id, role, experience, interview_type, difficulty, total_questions, status)
+            VALUES (%s, %s, %s, %s, %s, %s, 'in_progress')""",
+            (user_id, req.role, req.experience, req.interview_type, diff_normalized, actual_count)
         )
-        q_id = cursor.lastrowid
-        saved_questions.append({
-            "id": q_id,
-            "question_order": q["question_order"],
-            "question_text": q["question_text"],
-            "question_type": q_type,
-            "difficulty": q.get("difficulty", req.difficulty),
-            "ideal_answer": q.get("ideal_answer", ""),
-            "key_concepts": q.get("key_concepts", "")
-        })
+        interview_id = cursor.lastrowid
 
-    conn.close()
+        # Fetch created_at timestamp in millisecond epoch
+        cursor.execute("SELECT started_at, UNIX_TIMESTAMP(started_at) AS start_ts FROM interviews WHERE id = %s", (interview_id,))
+        row = cursor.fetchone()
+        if row and row.get("start_ts"):
+            start_timestamp = int(row["start_ts"] * 1000)
+        else:
+            start_timestamp = int(time.time() * 1000)
+
+        # Calculate total duration in seconds
+        sec_per_q = get_duration_per_question(req.interview_type, diff_normalized)
+        duration_seconds = actual_count * sec_per_q
+
+        saved_questions = []
+        for q in questions:
+            q_type = q.get("question_type", req.interview_type)
+            cursor.execute(
+                """INSERT INTO questions
+                (interview_id, question_text, question_type, difficulty, question_order, ideal_answer, key_concepts)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    interview_id,
+                    q["question_text"],
+                    q_type,
+                    q.get("difficulty", diff_normalized),
+                    q.get("question_order", 1),
+                    q.get("ideal_answer", ""),
+                    q.get("key_concepts", "")
+                )
+            )
+            q_id = cursor.lastrowid
+            saved_questions.append({
+                "id": q_id,
+                "question_order": q["question_order"],
+                "question_text": q["question_text"],
+                "question_type": q_type,
+                "difficulty": q.get("difficulty", diff_normalized),
+                "ideal_answer": q.get("ideal_answer", ""),
+                "key_concepts": q.get("key_concepts", "")
+            })
+    finally:
+        conn.close()
 
     return {
         "interview_id": interview_id,
         "role": req.role,
         "experience": req.experience,
         "interview_type": req.interview_type,
-        "difficulty": req.difficulty,
-        "total_questions": req.total_questions,
+        "difficulty": diff_normalized,
+        "total_questions": actual_count,
         "duration_seconds": duration_seconds,
         "start_timestamp": start_timestamp,
         "questions": saved_questions
@@ -376,11 +387,43 @@ def terminate_interview(interview_id: int, req: TerminateInterviewReq, current_u
     # Save to interview_results
     cursor.execute("SELECT id FROM interview_results WHERE interview_id = %s", (interview_id,))
     if not cursor.fetchone():
+        r_lower = (reason or "").lower()
+        if "mobile" in r_lower or "phone" in r_lower:
+            cat = "TERMINATED — MOBILE DETECTED"
+            strengths_msg = "None - Interview terminated early due to AI proctoring violation."
+            weak_msg = "Mobile phone or smart device detected in camera frame."
+            rec_msg = "Ensure all mobile phones and electronic devices are placed out of view during proctored sessions."
+        elif "paper" in r_lower or "book" in r_lower or "note" in r_lower:
+            cat = "TERMINATED — PAPER/NOTES DETECTED"
+            strengths_msg = "None - Interview terminated early due to AI proctoring violation."
+            weak_msg = "Paper, notebook, or written reference materials detected in camera frame."
+            rec_msg = "External notes and written reference materials are strictly prohibited during testing."
+        elif "device" in r_lower or "laptop" in r_lower or "tv" in r_lower or "screen" in r_lower or "remote" in r_lower:
+            cat = "TERMINATED — UNAUTHORIZED DEVICE"
+            strengths_msg = "None - Interview terminated early due to AI proctoring violation."
+            weak_msg = "Secondary electronic device or external display detected in camera frame."
+            rec_msg = "Only the primary testing device is allowed in view of the proctor camera."
+        elif "camera" in r_lower or "disconnect" in r_lower:
+            cat = "TERMINATED — CAMERA DISABLED"
+            strengths_msg = "None - Interview terminated early due to camera feed interruption."
+            weak_msg = "Webcam stream was stopped or disconnected during active interview."
+            rec_msg = "Maintain continuous webcam video feed throughout the entire interview."
+        elif "multiple" in r_lower or "person" in r_lower:
+            cat = "TERMINATED — MULTIPLE PERSONS"
+            strengths_msg = "None - Interview terminated early due to unauthorized presence."
+            weak_msg = "Multiple persons detected in camera frame during testing."
+            rec_msg = "Candidate must be alone in a quiet room during the entire interview duration."
+        else:
+            cat = "TERMINATED — TAB SWITCH DETECTED"
+            strengths_msg = "None - Interview terminated early due to tab switching."
+            weak_msg = "Tab switching detected during active interview."
+            rec_msg = "Stay on the interview tab throughout the interview duration."
+
         cursor.execute("""
             INSERT INTO interview_results
             (interview_id, technical_score, correctness_score, communication_score, completeness_score, overall_score, performance_category, strengths, weak_areas, recommendations)
-            VALUES (%s, 0.0, 0.0, 0.0, 0.0, 0.0, 'TERMINATED', 'None - Interview terminated early due to tab switching.', 'Tab switching detected during active interview.', 'Stay on the interview tab throughout the interview duration.')
-        """, (interview_id,))
+            VALUES (%s, 0.0, 0.0, 0.0, 0.0, 0.0, %s, %s, %s, %s)
+        """, (interview_id, cat, strengths_msg, weak_msg, rec_msg))
 
     conn.close()
     return {

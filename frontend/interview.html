@@ -3,23 +3,47 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>HirePilot — Live Interview</title>
-  <link rel="stylesheet" href="css/interview.css?v=3">
+  <title>HirePilot — Live Proctored Interview</title>
+  <link rel="stylesheet" href="css/interview.css?v=5">
 </head>
 <body>
 
   <header class="navbar">
     <div class="nav-container">
       <a href="index.html" class="brand-logo">Hire<span class="brand-accent">Pilot</span></a>
+      <div style="display:flex; align-items:center; gap:0.6rem;">
+        <span class="proctor-dot pulse"></span>
+        <span class="font-mono" style="font-size:0.8rem; font-weight:700; color:var(--text-main); letter-spacing:0.04em;">AI PROCTORED SESSION</span>
+      </div>
     </div>
   </header>
 
-  <main class="main-wrapper" style="max-width:860px;">
+  <main class="main-wrapper" style="max-width:980px;">
     <div id="timeout-banner" style="display:none; margin-bottom:1rem; padding:0.85rem; background:rgba(245, 158, 11, 0.12); border:1px solid var(--warning); color:var(--warning); border-radius:var(--radius-sm); font-weight:600; text-align:center;">
       ⏰ Time's up! Your interview has been submitted.
     </div>
 
-    <div class="interview-header">
+    <!-- Background AI Integrity Proctor Strip (No candidate video displayed) -->
+    <div id="proctor-panel" class="proctor-status-strip">
+      <div style="display:flex; align-items:center; gap:0.6rem;">
+        <span class="proctor-dot pulse"></span>
+        <span class="font-mono proctor-strip-title">AI INTEGRITY PROCTOR</span>
+        <span class="proctor-subtext">(Background camera security active)</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:0.5rem;">
+        <span id="proctor-detection-label" class="badge badge-cyan font-mono" style="font-size:0.65rem;">MONITORING</span>
+        <span id="proctor-status-badge" class="badge badge-green font-mono" style="font-size:0.65rem;">CAMERA SECURED</span>
+      </div>
+    </div>
+    <div id="proctor-warning-banner" class="proctor-warning-banner" style="display:none; margin-bottom:1rem;">
+      <span id="proctor-warning-text">⚠️ Prohibited item detected in camera frame!</span>
+    </div>
+
+    <!-- Hidden Video Element for In-Browser Machine Learning (Off-screen, zero user visibility) -->
+    <video id="proctor-video" autoplay playsinline muted style="position:fixed; top:-9999px; left:-9999px; width:320px; height:240px; opacity:0; pointer-events:none; z-index:-999;"></video>
+    <canvas id="proctor-canvas" style="display:none;"></canvas>
+
+    <div class="interview-header" style="margin-top:1.25rem;">
       <div>
         <span id="q-number-tag" class="badge badge-green font-mono">Question 1 of 10</span>
         <span id="q-type-tag" class="badge badge-cyan font-mono" style="margin-left:0.4rem;">TECHNICAL</span>
@@ -56,15 +80,14 @@
     </div>
   </main>
 
-  <!-- Tab Switch Termination Modal Overlay -->
+  <!-- Proctoring & Tab Switch Termination Modal Overlay -->
   <div id="termination-modal" class="modal-overlay" style="display: none;">
     <div class="modal-card">
-      <div class="modal-icon">⚠️</div>
-      <h2 class="modal-title">Interview Ended</h2>
-      <p class="modal-message">
-        Tab switching was detected.<br><br>
-        You left the HirePilot interview page while the interview was in progress.<br>
-        According to the interview rules, your interview has been automatically ended.
+      <div class="modal-icon" id="termination-icon">⚠️</div>
+      <h2 class="modal-title" id="termination-title">Interview Ended</h2>
+      <p class="modal-message" id="termination-message">
+        A security violation occurred during testing.<br><br>
+        According to interview integrity policies, your session has ended.
       </p>
       <div class="modal-actions">
         <button class="btn btn-primary btn-lg" onclick="viewTerminationResults()">View Result ➔</button>
@@ -75,6 +98,10 @@
   <footer>
     <p>© 2026 HirePilot. All rights reserved.</p>
   </footer>
+
+  <!-- Real-time Browser Machine Learning (COCO-SSD Object Detection) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
 
   <script src="js/api.js"></script>
   <script src="js/interview.js"></script>

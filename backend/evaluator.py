@@ -1,7 +1,9 @@
 import json
 import re
 from typing import Dict, Any
-from .config import AI_API_KEY
+from .config import get_ai_api_key
+
+EVAL_MODELS = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.5-flash"]
 
 def evaluate_answer(
     question_text: str,
@@ -33,76 +35,61 @@ def evaluate_answer(
         }
 
     # 1. Try Gemini API if available
-    if AI_API_KEY:
+    api_key = get_ai_api_key()
+    if api_key:
         try:
             from google import genai
-            client = genai.Client(api_key=AI_API_KEY)
+            from google.genai import types
+            client = genai.Client(api_key=api_key)
 
             if q_type == "Hr":
-                eval_criteria = """
-                Evaluate this HR / Recruitment interview response.
-                Focus evaluation on:
-                - Communication & Professionalism
-                - Clarity & Motivation
-                - Alignment with career goals & company culture
-                - Self-awareness and relevance
-                Do NOT penalize for lack of technical code syntax.
-                """
+                eval_criteria = "Evaluate HR fit: communication clarity, motivation, alignment with team and company culture."
             elif q_type == "Behavioral":
-                eval_criteria = """
-                Evaluate this Behavioral / Situational interview response.
-                Focus evaluation on:
-                - STAR method structure (Situation, Task, Action taken, Result achieved)
-                - Problem-solving skills and teamwork under pressure
-                - Decision-making, accountability, and practical learning from past experience
-                Do NOT penalize for lack of code syntax.
-                """
+                eval_criteria = "Evaluate Behavioral response: STAR method structure, practical problem-solving under pressure, ownership."
             else:
-                eval_criteria = """
-                Evaluate this Technical interview response.
-                Focus evaluation on:
-                - Technical accuracy and depth of explanation
-                - Use of relevant language/domain terminology
-                - Correctness of concepts and practical engineering awareness
-                """
+                eval_criteria = "Evaluate Technical response: technical accuracy, terminology, practical engineering understanding."
 
             prompt = f"""
-            Evaluate the following candidate response for a {role} position ({difficulty} difficulty):
-
-            Question Type: {q_type}
+            Evaluate this candidate interview response for {role} ({difficulty} difficulty, {q_type} question):
             Question: {question_text}
             Candidate Answer: {cleaned_answer}
-            Reference Ideal Answer: {ideal_answer}
-            Key Concepts / Criteria: {key_concepts}
+            Benchmark Ideal Answer: {ideal_answer}
+            Key Concepts: {key_concepts}
 
-            {eval_criteria}
+            Focus: {eval_criteria}
 
             Provide ratings from 0.0 to 10.0 for:
-            - correctness_score
-            - relevance_score
-            - technical_score
-            - clarity_score
-            - completeness_score
-            - overall score (0.0 to 10.0)
+            - correctness_score, relevance_score, technical_score, clarity_score, completeness_score, score (overall 0.0 to 10.0).
+            Provide concise feedback (1-2 sentences), 1 strength, and 1 actionable improvement suggestion.
 
             Return strict JSON with keys:
             "score", "correctness_score", "relevance_score", "technical_score", "clarity_score", "completeness_score",
             "feedback", "strengths", "improvement_suggestion", "ideal_answer", "key_concepts"
             Do NOT return markdown.
             """
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt
-            )
-            raw_text = response.text.strip()
-            if raw_text.startswith("```"):
-                raw_text = re.sub(r"^```(?:json)?\n?", "", raw_text)
-                raw_text = re.sub(r"\n?```$", "", raw_text)
-            parsed = json.loads(raw_text)
-            if isinstance(parsed, dict) and "score" in parsed:
-                return parsed
+
+            for model_name in EVAL_MODELS:
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            temperature=0.2,
+                            max_output_tokens=500
+                        )
+                    )
+                    raw_text = (response.text or "").strip()
+                    if raw_text.startswith("```"):
+                        raw_text = re.sub(r"^```(?:json)?\n?", "", raw_text)
+                        raw_text = re.sub(r"\n?```$", "", raw_text)
+                    parsed = json.loads(raw_text)
+                    if isinstance(parsed, dict) and "score" in parsed:
+                        return parsed
+                except Exception as m_err:
+                    continue
         except Exception as e:
-            print(f"[AI Evaluator Warning] API call failed ({e}). Using Category-Aware Local Evaluator.")
+            print(f"[AI Evaluator Warning] Gemini API call skipped ({e}). Using Category-Aware Local Evaluator.")
 
     # 2. Local Rule-Based NLP Evaluator
     concepts = [c.strip().lower() for c in key_concepts.replace(",", " ").split() if len(c.strip()) > 2]

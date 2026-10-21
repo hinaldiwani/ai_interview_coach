@@ -50,14 +50,94 @@ function restoreSavedConfig() {
   }
 }
 
+let setupCameraStream = null;
+let isCameraVerified = false;
+
+async function toggleSetupCamera() {
+  const videoEl = document.getElementById("setup-camera-video");
+  const placeholder = document.getElementById("setup-camera-placeholder");
+  const badge = document.getElementById("setup-camera-badge");
+  const faceGuide = document.getElementById("setup-face-guide");
+  const btnText = document.getElementById("camera-btn-text");
+  const cameraNotice = document.getElementById("camera-notice");
+
+  if (cameraNotice) cameraNotice.style.display = "none";
+
+  if (setupCameraStream) {
+    // Turn off camera
+    setupCameraStream.getTracks().forEach(t => t.stop());
+    setupCameraStream = null;
+    isCameraVerified = false;
+    if (videoEl) {
+      videoEl.srcObject = null;
+      videoEl.style.display = "none";
+    }
+    if (placeholder) placeholder.style.display = "block";
+    if (faceGuide) faceGuide.style.display = "none";
+    if (badge) {
+      badge.textContent = "CAMERA REQUIRED";
+      badge.className = "badge badge-danger font-mono";
+    }
+    if (btnText) btnText.textContent = "Turn On Camera";
+    return;
+  }
+
+  // Turn on camera (facingMode: 'user' for laptop webcam or mobile selfie camera)
+  try {
+    const constraints = {
+      video: {
+        facingMode: "user",
+        width: { ideal: 640 },
+        height: { ideal: 480 }
+      },
+      audio: false
+    };
+    setupCameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+    if (videoEl) {
+      videoEl.srcObject = setupCameraStream;
+      videoEl.style.display = "block";
+      await videoEl.play().catch(e => console.warn("Video preview play error:", e));
+    }
+    if (placeholder) placeholder.style.display = "none";
+    if (faceGuide) faceGuide.style.display = "block";
+    if (badge) {
+      badge.textContent = "✓ CAMERA VERIFIED";
+      badge.className = "badge badge-green font-mono";
+    }
+    if (btnText) btnText.textContent = "Turn Off Camera";
+    isCameraVerified = true;
+  } catch (err) {
+    console.error("Camera access error:", err);
+    isCameraVerified = false;
+    if (cameraNotice) {
+      cameraNotice.textContent = "⚠️ Camera access failed. Please ensure camera permissions are granted in your browser.";
+      cameraNotice.style.display = "block";
+    }
+  }
+}
+
 async function handleStartInterview(e) {
   e.preventDefault();
 
+  // 1. Mandatory Camera Verification Check
+  const cameraNotice = document.getElementById("camera-notice");
+  if (!isCameraVerified || !setupCameraStream) {
+    if (cameraNotice) {
+      cameraNotice.textContent = "⚠️ Camera is required! Please click 'Turn On Camera' to verify your camera feed before starting.";
+      cameraNotice.style.display = "block";
+      cameraNotice.scrollIntoView({ behavior: 'smooth' });
+    }
+    return;
+  } else if (cameraNotice) {
+    cameraNotice.style.display = "none";
+  }
+
+  // 2. Rules Agreement Check
   const agreeCb = document.getElementById("agree-rules");
   const rulesNotice = document.getElementById("rules-notice");
   if (agreeCb && !agreeCb.checked) {
     if (rulesNotice) {
-      rulesNotice.textContent = "Please accept the interview rules before starting.";
+      rulesNotice.textContent = "Please accept the AI proctoring rules before starting.";
       rulesNotice.style.display = "block";
       rulesNotice.scrollIntoView({ behavior: 'smooth' });
     }
@@ -74,16 +154,14 @@ async function handleStartInterview(e) {
   const difficulty = document.getElementById("difficulty").value;
   const total_questions = parseInt(document.getElementById("questions_count").value, 10);
 
-  // 1. Detect if user is NOT logged in BEFORE making API request
+  // 3. Detect if user is NOT logged in BEFORE making API request
   const token = ApiService.getAuthToken();
   if (!token) {
-    // Preserve interview configuration
     const config = { role, experience, interview_type, difficulty, total_questions };
     sessionStorage.setItem("saved_interview_config", JSON.stringify(config));
     sessionStorage.setItem("redirect_after_login", "interview-setup.html");
     sessionStorage.setItem("login_notice", "Please log in to run an interview.");
 
-    // Show user-friendly notice with explicit Login action
     const noticeDiv = document.getElementById("auth-notice");
     if (noticeDiv) {
       noticeDiv.innerHTML = `
@@ -96,7 +174,6 @@ async function handleStartInterview(e) {
       noticeDiv.scrollIntoView({ behavior: 'smooth' });
     }
 
-    // Redirect to login page
     setTimeout(() => {
       window.location.href = "login.html";
     }, 1200);
@@ -105,19 +182,26 @@ async function handleStartInterview(e) {
 
   const btn = document.getElementById("btn-start");
   btn.disabled = true;
-  btn.textContent = "⏳ Compiling questions...";
+  btn.textContent = "⏳ Generating AI questions via Gemini API...";
 
   try {
     const res = await ApiService.createInterview(role, experience, interview_type, difficulty, total_questions);
     
+    // Release preview stream so camera is ready for live interview
+    if (setupCameraStream) {
+      setupCameraStream.getTracks().forEach(t => t.stop());
+      setupCameraStream = null;
+    }
+
     sessionStorage.removeItem("saved_interview_config");
     sessionStorage.setItem("active_interview", JSON.stringify(res));
     window.location.href = "interview.html";
   } catch (err) {
     const noticeDiv = document.getElementById("auth-notice");
     if (noticeDiv) {
-      noticeDiv.textContent = err.message || "Execution failed. Please try again.";
+      noticeDiv.innerHTML = `⚠️ <strong>Generation Error:</strong> ${err.message || "Execution failed. Please verify your Gemini API key in .env and try again."}`;
       noticeDiv.style.display = "block";
+      noticeDiv.scrollIntoView({ behavior: 'smooth' });
     } else {
       alert(err.message || "Execution failed. Please try again.");
     }
@@ -169,15 +253,54 @@ function updateEstimatedDuration() {
   if (tag) tag.textContent = label;
 }
 
+const DIFFICULTY_COUNT_MAP = {
+  "Easy": "10",
+  "Medium": "20",
+  "Hard": "30"
+};
+
+const COUNT_DIFFICULTY_MAP = {
+  "10": "Easy",
+  "20": "Medium",
+  "30": "Hard"
+};
+
+function handleDifficultyChange() {
+  const diffEl = document.getElementById("difficulty");
+  const countEl = document.getElementById("questions_count");
+  if (diffEl && countEl && DIFFICULTY_COUNT_MAP[diffEl.value]) {
+    countEl.value = DIFFICULTY_COUNT_MAP[diffEl.value];
+  }
+  updateEstimatedDuration();
+}
+
+function handleCountChange() {
+  const diffEl = document.getElementById("difficulty");
+  const countEl = document.getElementById("questions_count");
+  if (diffEl && countEl && COUNT_DIFFICULTY_MAP[countEl.value]) {
+    diffEl.value = COUNT_DIFFICULTY_MAP[countEl.value];
+  }
+  updateEstimatedDuration();
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   restoreSavedConfig();
-  updateEstimatedDuration();
 
   const diffEl = document.getElementById("difficulty");
-  if (diffEl) diffEl.addEventListener("change", updateEstimatedDuration);
+  if (diffEl) {
+    diffEl.addEventListener("change", handleDifficultyChange);
+  }
 
   const countEl = document.getElementById("questions_count");
-  if (countEl) countEl.addEventListener("change", updateEstimatedDuration);
+  if (countEl) {
+    countEl.addEventListener("change", handleCountChange);
+  }
+
+  // Initial sync
+  if (diffEl && countEl) {
+    countEl.value = DIFFICULTY_COUNT_MAP[diffEl.value] || "20";
+  }
+  updateEstimatedDuration();
 });
 
 function handleLogout() {

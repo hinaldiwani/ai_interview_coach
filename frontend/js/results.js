@@ -24,7 +24,21 @@ async function loadResults(id) {
     let category = result.performance_category || "COMPLETED";
     
     if (isTerminated) {
-      category = "TERMINATED — TAB SWITCH DETECTED";
+      const reason = interview.termination_reason || result.performance_category || "";
+      const rLower = reason.toLowerCase();
+      if (rLower.includes("mobile") || rLower.includes("phone")) {
+        category = "TERMINATED — MOBILE PHONE DETECTED";
+      } else if (rLower.includes("paper") || rLower.includes("book") || rLower.includes("note")) {
+        category = "TERMINATED — PAPER / NOTES DETECTED";
+      } else if (rLower.includes("device") || rLower.includes("laptop") || rLower.includes("tv") || rLower.includes("remote")) {
+        category = "TERMINATED — UNAUTHORIZED DEVICE DETECTED";
+      } else if (rLower.includes("camera") || rLower.includes("disconnect")) {
+        category = "TERMINATED — CAMERA FEED DISCONNECTED";
+      } else if (rLower.includes("multiple") || rLower.includes("person")) {
+        category = "TERMINATED — MULTIPLE PERSONS DETECTED";
+      } else {
+        category = "TERMINATED — TAB SWITCH DETECTED";
+      }
       catTag.style.color = "var(--danger)";
     } else if (score >= 85) {
       category = "EXCELLENT BUILD";

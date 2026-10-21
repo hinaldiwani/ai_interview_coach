@@ -55,7 +55,7 @@ a:hover { color: var(--primary-hover); }
 .font-mono { font-family: var(--font-mono); }
 
 .brand-accent {
-  color: #8B5CF6;
+  color: #22C55E;
   font-weight: 800;
   transition: color 0.15s ease;
 }
@@ -90,13 +90,13 @@ a:hover { color: var(--primary-hover); }
   font-size: 3.2rem;
   font-weight: 800;
   text-decoration: none;
-  color: #C4B5FD;
+  color: #A7F3D0;
   letter-spacing: -0.035em;
   line-height: 1;
-  transition: opacity 0.15s ease;
+  transition: opacity 0.15s ease, filter 0.15s ease;
 }
-.brand-logo:hover { opacity: 0.92; color: #DDD6FE; }
-.brand-logo:hover .brand-accent { color: #A78BFA; }
+.brand-logo:hover { opacity: 0.98; color: #DCFCE7; filter: drop-shadow(0 0 10px rgba(34, 197, 94, 0.35)); }
+.brand-logo:hover .brand-accent { color: #4ADE80; }
 
 .nav-links { display: flex; gap: 1.5rem; list-style: none; }
 .nav-link {
@@ -221,4 +221,11 @@ footer {
   border-top: 1px solid var(--border);
   background: var(--bg-secondary);
   margin-top: auto;
+}
+
+.camera-verification-card {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.camera-verification-card:hover {
+  border-color: rgba(56, 189, 248, 0.4);
 }

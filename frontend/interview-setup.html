@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>HirePilot — Configure Interview</title>
-  <link rel="stylesheet" href="css/interview-setup.css?v=3">
+  <link rel="stylesheet" href="css/interview-setup.css?v=5">
 </head>
 <body>
 
@@ -93,49 +93,87 @@
           </div>
         </div>
 
-        <!-- Difficulty & Questions Count -->
+        <!-- Difficulty & Questions Count (Synced: Easy 10, Medium 20, Hard 30) -->
         <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1.25rem;" class="form-group">
-          <div>
-            <label class="form-label">QUESTIONS</label>
-            <select id="questions_count" class="form-control">
-              <option value="5">5 Questions (Short)</option>
-              <option value="10" selected>10 Questions (Standard)</option>
-              <option value="15">15 Questions (Full)</option>
-            </select>
-          </div>
           <div>
             <label class="form-label">DIFFICULTY</label>
             <select id="difficulty" class="form-control">
-              <option value="Easy">Easy</option>
-              <option value="Medium" selected>Medium</option>
-              <option value="Hard">Hard</option>
+              <option value="Easy">Easy (10 Questions)</option>
+              <option value="Medium" selected>Medium (20 Questions)</option>
+              <option value="Hard">Hard (30 Questions)</option>
             </select>
           </div>
+          <div>
+            <label class="form-label">QUESTIONS (GEMINI AI)</label>
+            <select id="questions_count" class="form-control">
+              <option value="10">10 Questions (Easy)</option>
+              <option value="20" selected>20 Questions (Medium)</option>
+              <option value="30">30 Questions (Hard)</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="font-size: 0.8rem; color: var(--primary); margin-top: -0.5rem; margin-bottom: 0.85rem; display: flex; align-items: center; gap: 0.35rem;">
+          <span>✨ Questions & benchmark answers are generated live via Gemini API and saved directly to MySQL history.</span>
         </div>
 
         <!-- Estimated Duration Preview Box -->
         <div style="background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm); padding:0.85rem 1rem; margin-top:1.25rem; display:flex; justify-content:space-between; align-items:center;">
           <span class="font-mono" style="font-size:0.825rem; font-weight:600; color:var(--text-secondary); text-transform:uppercase;">Estimated Duration:</span>
-          <span id="est-duration-tag" class="font-mono" style="font-size:1.05rem; font-weight:800; color:var(--primary);">30 minutes</span>
+          <span id="est-duration-tag" class="font-mono" style="font-size:1.05rem; font-weight:800; color:var(--primary);">60 minutes</span>
         </div>
 
-        <!-- Interview Rules Warning Box -->
-        <div style="background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: var(--radius-sm); padding: 1.15rem; margin-top: 1.25rem;">
-          <h3 style="font-size: 1rem; font-weight: 700; color: #C4B5FD; margin-bottom: 0.6rem; display: flex; align-items: center; gap: 0.4rem;">
-            ⚠️ Interview Rules
+        <!-- Mandatory Camera Verification Card -->
+        <div class="card camera-verification-card" style="margin-top:1.25rem; padding:1.25rem; border:1px solid var(--border); background:var(--surface);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem; flex-wrap:wrap; gap:0.5rem;">
+            <div>
+              <span class="font-mono" style="font-size:0.75rem; font-weight:700; color:var(--accent-cyan); letter-spacing:0.05em; text-transform:uppercase;">📹 MANDATORY PROCTOR CHECK</span>
+              <h3 style="font-size:1.05rem; font-weight:700; margin-top:0.2rem;">Camera & Face Verification</h3>
+            </div>
+            <span id="setup-camera-badge" class="badge badge-danger font-mono" style="font-size:0.75rem;">CAMERA REQUIRED</span>
+          </div>
+          
+          <p style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:1rem; line-height:1.5;">
+            You must turn on your laptop webcam or mobile selfie camera. The interview cannot start without an active camera feed.
+          </p>
+
+          <div id="setup-preview-container" style="position:relative; width:100%; max-width:320px; margin:0 auto 1rem auto; aspect-ratio:4/3; background:#0B1120; border-radius:var(--radius-sm); overflow:hidden; border:2px dashed var(--border); display:flex; align-items:center; justify-content:center;">
+            <video id="setup-camera-video" autoplay playsinline muted style="width:100%; height:100%; object-fit:cover; display:none; transform: scaleX(-1);"></video>
+            <div id="setup-camera-placeholder" style="text-align:center; padding:1.5rem;">
+              <div style="font-size:2.5rem; margin-bottom:0.5rem;">📷</div>
+              <div style="font-size:0.825rem; color:var(--text-muted); font-weight:500;">Camera is currently off.</div>
+              <div style="font-size:0.75rem; color:var(--text-muted); margin-top:0.25rem;">(Laptop webcam or Mobile selfie camera)</div>
+            </div>
+            <div id="setup-face-guide" style="display:none; position:absolute; border:2px dashed rgba(34,197,94,0.6); border-radius:50%; width:150px; height:190px; pointer-events:none; box-shadow:0 0 15px rgba(34,197,94,0.2);"></div>
+          </div>
+
+          <div style="display:flex; justify-content:center;">
+            <button type="button" id="btn-toggle-camera" class="btn btn-secondary" onclick="toggleSetupCamera()" style="font-size:0.85rem; padding:0.55rem 1.5rem; display:flex; align-items:center; gap:0.5rem;">
+              <span>📹</span> <span id="camera-btn-text">Turn On Camera</span>
+            </button>
+          </div>
+          <div id="camera-notice" class="error-message" style="display:none; margin-top:0.75rem; text-align:center;"></div>
+        </div>
+
+        <!-- Interview Rules & AI Proctoring Policy -->
+        <div style="background: rgba(34, 197, 94, 0.08); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: var(--radius-sm); padding: 1.15rem; margin-top: 1.25rem;">
+          <h3 style="font-size: 1rem; font-weight: 700; color: #86EFAC; margin-bottom: 0.6rem; display: flex; align-items: center; gap: 0.4rem;">
+            ⚠️ Proctored Interview Security Rules
           </h3>
           <div style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5; margin-bottom: 0.85rem;">
-            Before you begin, please note:
+            This interview is strictly monitored by live AI Proctoring. Violations trigger automatic termination:
             <ul style="margin: 0.4rem 0 0 1.1rem; padding: 0;">
-              <li>Stay on the HirePilot interview page throughout the interview.</li>
-              <li>Do not switch browser tabs or applications.</li>
-              <li>Do not use ChatGPT, Google, or other external resources during the interview.</li>
-              <li>Switching tabs or leaving the interview page will automatically end your interview.</li>
+              <li><strong>Camera must remain ON</strong> (laptop webcam or mobile selfie camera) at all times.</li>
+              <li><strong>NO Mobile Phones or Smart Devices:</strong> Detecting a cell phone or electronic device automatically terminates the interview.</li>
+              <li><strong>NO Paper, Books, or Written Notes:</strong> Holding or showing sheets of paper, notebooks, or written material will end the session immediately.</li>
+              <li><strong>NO Secondary Screens or Devices:</strong> External laptops, TVs, or screens in frame trigger immediate termination.</li>
+              <li><strong>NO Tab Switching:</strong> Leaving or blurring the interview tab terminates the test instantly.</li>
+              <li><strong>You must be alone:</strong> Multiple persons in frame will cause automatic termination.</li>
             </ul>
           </div>
           <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.85rem; font-weight: 600; color: var(--text-main); user-select: none;">
             <input type="checkbox" id="agree-rules" style="width: 1rem; height: 1rem; accent-color: var(--primary); cursor: pointer;">
-            I understand and agree to the interview rules.
+            I accept the AI proctoring rules and agree to live camera monitoring.
           </label>
         </div>
 

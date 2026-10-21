@@ -15,8 +15,13 @@ JWT_SECRET = os.getenv("JWT_SECRET", "super_secret_ai_interview_coach_key_2026")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 1440))
 
-# AI API Key
-AI_API_KEY = os.getenv("AI_API_KEY", os.getenv("GEMINI_API_KEY", "")).strip()
+# AI API Key (Gemini)
+def get_ai_api_key() -> str:
+    """Dynamically retrieves Gemini API key from environment or .env."""
+    load_dotenv(override=True)
+    return (os.getenv("GEMINI_API_KEY") or os.getenv("AI_API_KEY") or "").strip()
+
+AI_API_KEY = get_ai_api_key()
 
 # Server Config
 HOST = os.getenv("HOST", "127.0.0.1")

@@ -1,135 +1,38 @@
 import json
-import random
 import re
-from typing import List, Dict, Any
-from .config import AI_API_KEY
-from .database import get_db
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Dict, Any, Optional
 
-# Specialized Fallback Pools for offline / seed backup
-FALLBACK_TECHNICAL_QUESTIONS = [
-    {
-        "question_text": "What are the main features of Python as a programming language?",
-        "topic": "Python Fundamentals",
-        "question_type": "Technical",
-        "ideal_answer": "Python is an interpreted, high-level, dynamically typed language supporting OOP, procedural, and functional paradigms. Key features include clean syntax, automatic garbage collection, and extensive standard libraries.",
-        "key_concepts": "Interpreted, High-level, Dynamic Typing, Standard Library"
-    },
-    {
-        "question_text": "What is the difference between a list and a tuple in Python?",
-        "topic": "Data Structures",
-        "question_type": "Technical",
-        "ideal_answer": "Lists are mutable sequences defined using square brackets [], while tuples are immutable sequences defined using parentheses (). Tuples consume less memory and execute faster.",
-        "key_concepts": "Mutability, Immutability, Memory Efficiency"
-    },
-    {
-        "question_text": "What is the difference between `==` and `is` operators in Python?",
-        "topic": "Operators & Memory",
-        "question_type": "Technical",
-        "ideal_answer": "The == operator compares value equality, checking if two objects hold identical content. The `is` operator compares identity equality, checking if two variables reference the exact same memory address.",
-        "key_concepts": "Value Equality, Identity Equality, Memory Address"
-    },
-    {
-        "question_text": "Explain Python decorators and provide a practical use case.",
-        "topic": "Advanced Python",
-        "question_type": "Technical",
-        "ideal_answer": "A decorator is a higher-order function that takes another function as an argument, extends its functionality without modifying it, and returns the modified function. Practical uses include logging, auth, and caching.",
-        "key_concepts": "First-class functions, Higher-order functions, Wrappers"
-    },
-    {
-        "question_text": "How does exception handling work in Python using try, except, else, and finally?",
-        "topic": "Error Handling",
-        "question_type": "Technical",
-        "ideal_answer": "Exceptions are handled in try-except blocks. `try` executes candidate code; `except` catches specific errors; `else` runs if no exception occurred; `finally` runs unconditionally for resource cleanup.",
-        "key_concepts": "Try-Except, Exception Hierarchy, Cleanup"
-    }
-]
+from .config import get_ai_api_key
 
-FALLBACK_HR_QUESTIONS = [
-    {
-        "question_text": "Tell me about yourself and why you chose a career in software engineering.",
-        "topic": "Introduction",
-        "question_type": "HR",
-        "ideal_answer": "Candidate should summarize educational background, core technical skills, passion for technology, and long-term career ambition in a clear, concise manner.",
-        "key_concepts": "Communication, Self-Introduction, Passion, Career Goals"
-    },
-    {
-        "question_text": "Why are you interested in joining our company specifically?",
-        "topic": "Company Fit",
-        "question_type": "HR",
-        "ideal_answer": "Candidate should demonstrate research into company products, engineering culture, and align personal professional goals with company mission.",
-        "key_concepts": "Motivation, Alignment, Company Research, Product Understanding"
-    },
-    {
-        "question_text": "What are your greatest professional strengths, and what is one area you are working to improve?",
-        "topic": "Self Awareness",
-        "question_type": "HR",
-        "ideal_answer": "Candidate should highlight genuine technical strengths backed by project examples, and share an honest growth area alongside concrete steps taken to improve.",
-        "key_concepts": "Strengths, Self Reflection, Continuous Learning, Adaptability"
-    },
-    {
-        "question_text": "Where do you see yourself professionally in the next 3 to 5 years?",
-        "topic": "Career Vision",
-        "question_type": "HR",
-        "ideal_answer": "Candidate should describe a realistic trajectory toward technical mastery, taking on architecture responsibilities, or leading project teams.",
-        "key_concepts": "Vision, Growth Mindset, Long-term Commitment, Professional Development"
-    },
-    {
-        "question_text": "How do you handle constructive criticism and feedback on your work?",
-        "topic": "Workplace Culture",
-        "question_type": "HR",
-        "ideal_answer": "Candidate should show humility, active listening skills, and explain how feedback is evaluated to improve code quality and team performance.",
-        "key_concepts": "Feedback, Professionalism, Team Collaboration, Receptiveness"
-    }
-]
+# Mapping required by specification:
+# Easy -> 10 questions
+# Medium -> 20 questions
+# Hard -> 30 questions
+DIFFICULTY_QUESTION_MAP = {
+    "Easy": 10,
+    "Medium": 20,
+    "Hard": 30
+}
 
-FALLBACK_BEHAVIORAL_QUESTIONS = [
-    {
-        "question_text": "Tell me about a time when you had to work under a tight project deadline. How did you prioritize tasks?",
-        "topic": "Time Management",
-        "question_type": "Behavioral",
-        "ideal_answer": "Candidate should structure response using STAR method: situation overview, task requirements, action taken to refactor scope/prioritize critical paths, and positive outcome.",
-        "key_concepts": "STAR Method, Prioritization, Deadline Pressure, Problem Solving"
-    },
-    {
-        "question_text": "Describe a situation where you had a technical disagreement with a teammate. How did you resolve it?",
-        "topic": "Conflict Resolution",
-        "question_type": "Behavioral",
-        "ideal_answer": "Candidate should highlight respectful communication, evaluating technical benchmarks or metrics objectively, finding common ground, and committing to the final team decision.",
-        "key_concepts": "Respectful Dialogue, Technical Trade-offs, Compromise, Team Consensus"
-    },
-    {
-        "question_text": "Tell me about a project that did not go as planned or a mistake you made. What did you learn from it?",
-        "topic": "Accountability & Growth",
-        "question_type": "Behavioral",
-        "ideal_answer": "Candidate should take ownership without blaming others, analyze root causes (estimation error, scope creep), and detail how they updated their engineering workflow.",
-        "key_concepts": "Ownership, Root Cause Analysis, Post-Mortem, Accountability"
-    },
-    {
-        "question_text": "Describe a time when you had to learn a completely new technology or framework quickly for a task.",
-        "topic": "Adaptability",
-        "question_type": "Behavioral",
-        "ideal_answer": "Candidate should describe learning strategy (docs, tutorials, prototyping), rapid execution, and delivering a functional solution under time constraints.",
-        "key_concepts": "Agile Learning, Prototyping, Resourcefulness, Execution"
-    },
-    {
-        "question_text": "Give an example of a situation where you demonstrated leadership or initiative in a project.",
-        "topic": "Leadership",
-        "question_type": "Behavioral",
-        "ideal_answer": "Candidate should describe identifying a gap or technical debt, proposing a solution, guiding peers, and delivering measurable value.",
-        "key_concepts": "Initiative, Technical Leadership, Problem Identification, Impact"
-    }
-]
+MODELS_TO_TRY = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.5-flash"]
+
+
+def get_question_count_by_difficulty(difficulty: str) -> int:
+    """Returns the mandatory question count based on interview difficulty level."""
+    diff_key = (difficulty or "Medium").strip().title()
+    return DIFFICULTY_QUESTION_MAP.get(diff_key, 20)
 
 
 def normalize_text(text: str) -> str:
     """Normalizes string for deduplication comparison."""
-    text = text.lower()
-    text = re.sub(r'[^a-z0-9\s]', '', text)
+    text = (text or "").lower()
+    text = re.sub(r"[^a-z0-9\s]", "", text)
     return " ".join(text.split())
 
 
 def deduplicate_questions(questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Removes duplicate or near-duplicate questions based on normalized text."""
+    """Removes duplicate or near-duplicate questions based on normalized word overlap."""
     unique = []
     seen_texts = set()
 
@@ -137,7 +40,6 @@ def deduplicate_questions(questions: List[Dict[str, Any]]) -> List[Dict[str, Any
         norm = normalize_text(q.get("question_text", ""))
         if not norm:
             continue
-        # Extract core words
         words = set(norm.split())
         is_duplicate = False
 
@@ -156,36 +58,132 @@ def deduplicate_questions(questions: List[Dict[str, Any]]) -> List[Dict[str, Any
     return unique
 
 
-def get_type_prompt_instructions(type_name: str, role: str, experience: str, difficulty: str) -> str:
-    """Generates strict guidelines per interview type."""
-    t = type_name.strip().lower()
+def get_type_prompt_instructions(type_name: str, role: str, experience: str, difficulty: str, focus_area: str = "") -> str:
+    """Generates prompt guidelines tailored to interview type and focus domain."""
+    t = (type_name or "Technical").strip().lower()
+    focus_clause = f"\nSpecific Focus for this batch: {focus_area}." if focus_area else ""
+
     if t == "technical":
         return f"""
-        Generate STRICTLY TECHNICAL questions specifically relevant to the role '{role}'.
-        - Target Experience: {experience}
-        - Difficulty Level: {difficulty}
-        - Focus ONLY on: programming concepts, language syntax, algorithms, frameworks, database queries, API design, architecture, debugging, and practical engineering scenarios for a {role}.
-        - ABSOLUTELY DO NOT include any HR, behavioral, personal background, or general recruitment questions (e.g., DO NOT ask 'Tell me about yourself', 'Why work here', 'Strengths and weaknesses').
+        Generate STRICTLY TECHNICAL interview questions tailored to '{role}'.
+        - Target Experience Level: {experience}
+        - Target Difficulty Level: {difficulty}
+        - Focus Areas: Language internals, core concepts, data structures, algorithms, frameworks, APIs, database optimization, architecture, debugging.{focus_clause}
+        - ABSOLUTELY DO NOT include HR, behavioral, personal background, or generic questions.
         """
     elif t == "hr":
         return f"""
-        Generate STRICTLY HR and recruitment-focused interview questions.
-        - Target Role: {role} (context only)
-        - Target Experience: {experience}
-        - Focus ONLY on: career motivation, professional goals, teamwork preferences, communication skills, handling feedback, strengths/weaknesses, compensation expectations, and company culture fit.
-        - ABSOLUTELY DO NOT ask any programming, coding, technical syntax, or direct technology definition questions (e.g., DO NOT ask 'What is a decorator', 'What is a list vs tuple', 'What is an API').
+        Generate STRICTLY HR, recruitment, and cultural-fit interview questions.
+        - Target Role (Context): {role}
+        - Target Experience Level: {experience}
+        - Target Difficulty Level: {difficulty}
+        - Focus Areas: Professional motivation, career trajectory, team dynamics, communication, constructive feedback, company values.{focus_clause}
+        - ABSOLUTELY DO NOT ask coding syntax or technical definition questions.
         """
     elif t == "behavioral":
         return f"""
-        Generate STRICTLY BEHAVIORAL and situational interview questions evaluating past experiences.
-        - Target Role: {role} (context only)
-        - Target Experience: {experience}
-        - Questions MUST use situational formats like: 'Tell me about a time when...', 'Describe a situation where...', 'Give an example of...', 'How did you handle...'.
-        - Focus ONLY on evaluating: problem-solving under pressure, conflict resolution, teamwork, accountability, leadership, handling tight deadlines, and learning from mistakes.
-        - ABSOLUTELY DO NOT ask direct technical definitions or coding syntax questions (e.g., DO NOT ask 'What is inheritance', 'What is an index').
+        Generate STRICTLY BEHAVIORAL and situational interview questions.
+        - Target Role (Context): {role}
+        - Target Experience Level: {experience}
+        - Target Difficulty Level: {difficulty}
+        - Formatting Requirement: Must use situational framing such as 'Tell me about a time when...', 'Describe a scenario where...'.
+        - Focus Areas: STAR method scenarios: handling tight deadlines, cross-team conflict, architectural disagreements, failure ownership, leadership.{focus_clause}
+        - ABSOLUTELY DO NOT ask direct coding syntax or technology trivia questions.
         """
     else:
-        return f"Generate questions suitable for role {role}, experience {experience}, difficulty {difficulty}."
+        return f"Generate high-quality interview questions for role '{role}', experience '{experience}', difficulty '{difficulty}'.{focus_clause}"
+
+
+def _call_gemini_batch(
+    client: Any,
+    role: str,
+    experience: str,
+    batch_type: str,
+    difficulty: str,
+    batch_count: int,
+    focus_area: str = ""
+) -> List[Dict[str, Any]]:
+    """Helper to query Gemini API for a single batch of questions with their ideal answers."""
+    from google.genai import types
+
+    type_instructions = get_type_prompt_instructions(batch_type, role, experience, difficulty, focus_area)
+
+    prompt = f"""
+    You are an expert interview coach and technical hiring manager.
+    Generate exactly {batch_count} realistic interview questions for:
+    - Role: {role}
+    - Experience: {experience}
+    - Interview Type: {batch_type}
+    - Difficulty: {difficulty}
+
+    {type_instructions}
+
+    REQUIREMENTS:
+    1. Every question MUST be paired with its benchmark "ideal_answer" and "key_concepts".
+    2. "ideal_answer": Keep it concise (strictly 1 to 2 clear sentences capturing the core solution, principle, or best practice).
+    3. "key_concepts": Comma-separated list of 3-4 critical keywords.
+    4. "topic": Brief category (e.g., 'Concurrency', 'System Design', 'Conflict Resolution').
+
+    Format output as a valid JSON array of objects with the exact schema:
+    [
+      {{
+        "question_text": "...",
+        "topic": "...",
+        "ideal_answer": "...",
+        "key_concepts": "..."
+      }}
+    ]
+    Do not wrap in markdown or backticks. Return valid JSON only.
+    """
+
+    last_error = None
+    for model_name in MODELS_TO_TRY:
+        try:
+            config = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.6,
+                max_output_tokens=1500
+            )
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=config
+            )
+            raw_text = (response.text or "").strip()
+            if not raw_text:
+                continue
+
+            # Strip markdown if present
+            if raw_text.startswith("```"):
+                raw_text = re.sub(r"^```(?:json)?\n?", "", raw_text)
+                raw_text = re.sub(r"\n?```$", "", raw_text)
+
+            parsed = json.loads(raw_text)
+            if isinstance(parsed, dict) and "questions" in parsed:
+                parsed = parsed["questions"]
+
+            if isinstance(parsed, list) and len(parsed) > 0:
+                validated = []
+                for item in parsed:
+                    if isinstance(item, dict) and item.get("question_text"):
+                        validated.append({
+                            "question_text": str(item.get("question_text", "")).strip(),
+                            "topic": str(item.get("topic", "General")).strip(),
+                            "ideal_answer": str(item.get("ideal_answer", "")).strip() or "Comprehensive answer covering core principles.",
+                            "key_concepts": str(item.get("key_concepts", "")).strip() or "Core concepts, Implementation details",
+                            "question_type": batch_type,
+                            "difficulty": difficulty
+                        })
+                if validated:
+                    return validated[:batch_count]
+        except Exception as err:
+            last_error = err
+            print(f"[Gemini Generator] Model '{model_name}' batch attempt encountered error: {err}")
+            continue
+
+    if last_error:
+        print(f"[Gemini Generator Warning] All models failed for batch ({batch_type}, {focus_area}): {last_error}")
+    return []
 
 
 def generate_questions(
@@ -193,136 +191,126 @@ def generate_questions(
     experience: str,
     interview_type: str,
     difficulty: str,
-    total_questions: int = 5
+    total_questions: Optional[int] = None
 ) -> List[Dict[str, Any]]:
-    """Generates interview questions using Gemini API or MySQL database seed bank."""
+    """
+    Generates interview questions and benchmark answers strictly using the Gemini API.
+    Enforces specification:
+      - Easy   -> 10 questions
+      - Medium -> 20 questions
+      - Hard   -> 30 questions
+    """
+    api_key = get_ai_api_key()
+    if not api_key:
+        raise ValueError(
+            "Gemini API key is not configured. Please add GEMINI_API_KEY to your .env file to generate interview questions via AI."
+        )
 
-    target_type = (interview_type or "Technical").strip()
-    result_questions: List[Dict[str, Any]] = []
+    norm_difficulty = (difficulty or "Medium").strip().title()
+    if norm_difficulty not in DIFFICULTY_QUESTION_MAP:
+        norm_difficulty = "Medium"
 
-    # Calculate category distribution if Mixed
+    # Enforce mandatory question counts per difficulty
+    target_count = DIFFICULTY_QUESTION_MAP[norm_difficulty]
+    target_type = (interview_type or "Technical").strip().title()
+
+    try:
+        from google import genai
+        client = genai.Client(api_key=api_key)
+    except Exception as e:
+        raise RuntimeError(f"Failed to initialize Gemini GenAI Client: {e}")
+
+    # Build plan for parallel batches of ~10 questions each
+    # This prevents prompt token truncation, network timeouts, and ensures varied subtopics
+    batch_plans = []
+
     if target_type.lower() == "mixed":
-        # Controlled mix: ~40% Technical, ~30% Behavioral, ~30% HR
-        tech_count = max(1, int(round(total_questions * 0.4)))
-        beh_count = max(1, int(round(total_questions * 0.3)))
-        hr_count = max(1, total_questions - tech_count - beh_count)
-        
-        type_batches = [
-            ("Technical", tech_count),
-            ("Behavioral", beh_count),
-            ("HR", hr_count)
-        ]
+        if target_count == 10:  # Easy
+            batch_plans.append(("Technical", 4, "Fundamental programming, syntax, basic problem solving"))
+            batch_plans.append(("Behavioral", 3, "Team collaboration, learning, deadline management"))
+            batch_plans.append(("HR", 3, "Motivation, career ambitions, company fit"))
+        elif target_count == 20:  # Medium
+            batch_plans.append(("Technical", 8, "Core algorithms, data structures, framework patterns, database queries"))
+            batch_plans.append(("Behavioral", 6, "STAR scenarios: conflict resolution, pressure, accountability"))
+            batch_plans.append(("HR", 6, "Professional growth, feedback reception, workplace culture"))
+        else:  # Hard (30)
+            batch_plans.append(("Technical", 12, "Advanced architecture, performance optimization, concurrency, system design"))
+            batch_plans.append(("Behavioral", 9, "High-stakes leadership, critical technical trade-offs, crisis management"))
+            batch_plans.append(("HR", 9, "Executive presence, strategic career direction, cross-functional leadership"))
     else:
-        type_batches = [(target_type, total_questions)]
+        # Single type interview: divide into batches with diverse engineering focuses
+        if target_count == 10:  # Easy
+            batch_plans.append((target_type, 10, "Foundational principles, core syntax, common definitions, basic scenarios"))
+        elif target_count == 20:  # Medium
+            batch_plans.append((target_type, 10, "Core concepts, frameworks, standard design patterns, API workflows"))
+            batch_plans.append((target_type, 10, "Practical engineering scenarios, error handling, performance tuning, debugging"))
+        else:  # Hard (30)
+            batch_plans.append((target_type, 10, "Language internals, deep memory management, complex algorithms & data structures"))
+            batch_plans.append((target_type, 10, "Distributed systems, architectural scalability, security, microservices trade-offs"))
+            batch_plans.append((target_type, 10, "Real-world production debugging, incident recovery, resilience, edge-case optimization"))
 
-    for batch_type, batch_count in type_batches:
-        batch_questions = []
+    print(f"\n[Gemini Generator] Generating {target_count} questions for '{role}' ({norm_difficulty}, {target_type}) across {len(batch_plans)} batches...")
 
-        # 1. Try Gemini API
-        if AI_API_KEY:
+    all_generated: List[Dict[str, Any]] = []
+
+    # Run batches concurrently for lightning-fast latency
+    with ThreadPoolExecutor(max_workers=len(batch_plans)) as executor:
+        futures = {
+            executor.submit(
+                _call_gemini_batch,
+                client,
+                role,
+                experience,
+                b_type,
+                norm_difficulty,
+                b_count,
+                b_focus
+            ): (b_type, b_count)
+            for b_type, b_count, b_focus in batch_plans
+        }
+
+        for future in as_completed(futures):
             try:
-                from google import genai
-                client = genai.Client(api_key=AI_API_KEY)
-                
-                type_instructions = get_type_prompt_instructions(batch_type, role, experience, difficulty)
-                
-                prompt = f"""
-                Generate exactly {batch_count} interview questions.
+                batch_res = future.result()
+                if batch_res:
+                    all_generated.extend(batch_res)
+            except Exception as exc:
+                print(f"[Gemini Generator] Batch execution failed: {exc}")
 
-                {type_instructions}
+    # Deduplicate generated questions
+    final_questions = deduplicate_questions(all_generated)
 
-                Return a strict JSON array of objects with keys:
-                "question_text", "topic", "ideal_answer", "key_concepts".
-                Do NOT return markdown formatting.
-                """
-                
-                response = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=prompt
-                )
-                raw_text = response.text.strip()
-                if raw_text.startswith("```"):
-                    raw_text = re.sub(r"^```(?:json)?\n?", "", raw_text)
-                    raw_text = re.sub(r"\n?```$", "", raw_text)
-                parsed = json.loads(raw_text)
-                if isinstance(parsed, list) and len(parsed) > 0:
-                    for q in parsed:
-                        q["question_type"] = batch_type
-                        q["difficulty"] = difficulty
-                    batch_questions.extend(parsed[:batch_count])
-            except Exception as e:
-                print(f"[AI Generator Warning] Gemini call for {batch_type} skipped ({e}). Using Database Seed Bank.")
-
-        # 2. Database Seed Bank Fallback if batch incomplete
-        if len(batch_questions) < batch_count:
-            needed = batch_count - len(batch_questions)
-            try:
-                conn = get_db()
-                cursor = conn.cursor()
-                cursor.execute(
-                    """SELECT question_text, topic, ideal_answer, key_concepts, interview_type 
-                       FROM question_bank 
-                       WHERE (role = %s OR role = 'Software Developer') 
-                         AND (interview_type = %s OR %s = 'Mixed')
-                         AND (difficulty = %s OR difficulty = 'Medium')""",
-                    (role, batch_type, batch_type, difficulty)
-                )
-                rows = cursor.fetchall()
-                conn.close()
-                if rows:
-                    for r in rows:
-                        item = dict(r)
-                        item["question_type"] = batch_type
-                        item["difficulty"] = difficulty
-                        batch_questions.append(item)
-            except Exception as db_err:
-                print(f"[Database Seed Bank Warning] {db_err}")
-
-        # 3. Dedicated Fallback Arrays if still insufficient
-        if len(batch_questions) < batch_count:
-            if batch_type.lower() == "hr":
-                pool_source = FALLBACK_HR_QUESTIONS
-            elif batch_type.lower() == "behavioral":
-                pool_source = FALLBACK_BEHAVIORAL_QUESTIONS
-            else:
-                pool_source = FALLBACK_TECHNICAL_QUESTIONS
-
-            pool = list(pool_source)
-            random.shuffle(pool)
-            while len(batch_questions) < batch_count:
-                item = random.choice(pool).copy()
-                item["question_type"] = batch_type
-                item["difficulty"] = difficulty
-                batch_questions.append(item)
-
-        result_questions.extend(batch_questions[:batch_count])
-
-    # Deduplicate questions
-    final_questions = deduplicate_questions(result_questions)
-
-    # Fill if deduplication reduced below total_questions
-    if len(final_questions) < total_questions:
-        if target_type.lower() == "hr":
-            extra_pool = FALLBACK_HR_QUESTIONS
-        elif target_type.lower() == "behavioral":
-            extra_pool = FALLBACK_BEHAVIORAL_QUESTIONS
-        else:
-            extra_pool = FALLBACK_TECHNICAL_QUESTIONS
-
-        for item in extra_pool:
-            if len(final_questions) >= total_questions:
+    # Top-up if deduplication or a batch returned slightly fewer questions
+    if len(final_questions) < target_count:
+        missing = target_count - len(final_questions)
+        print(f"[Gemini Generator] Batch count ({len(final_questions)}) below target ({target_count}). Requesting top-up of {missing} questions...")
+        top_up_type = target_type if target_type.lower() != "mixed" else "Technical"
+        top_up = _call_gemini_batch(
+            client,
+            role,
+            experience,
+            top_up_type,
+            norm_difficulty,
+            missing,
+            "Additional unique scenario-based questions"
+        )
+        for item in top_up:
+            if len(final_questions) >= target_count:
                 break
-            candidate = item.copy()
-            candidate["question_type"] = target_type
-            candidate["difficulty"] = difficulty
-            final_questions.append(candidate)
+            final_questions.append(item)
 
-    # Assign order indices
-    for idx, q in enumerate(final_questions[:total_questions]):
+    if not final_questions:
+        raise RuntimeError(
+            f"Failed to generate questions from Gemini API. Please check your network connection and verify your GEMINI_API_KEY."
+        )
+
+    # Ensure exact required count and sequential order numbers
+    selected = final_questions[:target_count]
+    for idx, q in enumerate(selected):
         q["question_order"] = idx + 1
-        if "question_type" not in q:
+        q["difficulty"] = norm_difficulty
+        if not q.get("question_type"):
             q["question_type"] = target_type
-        if "difficulty" not in q:
-            q["difficulty"] = difficulty
 
-    return final_questions[:total_questions]
+    print(f"[Gemini Generator] Successfully compiled {len(selected)} AI questions with benchmark ideal answers.\n")
+    return selected
